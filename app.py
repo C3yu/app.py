@@ -1,176 +1,126 @@
-import yfinance as yf
 import streamlit as st
+import yfinance as yf
 import pandas as pd
 import datetime
-from streamlit.column_config import LineChartColumn # Import สำหรับ Sparkline
+from dateutil.relativedelta import relativedelta # อาจจะต้อง pip install python-dateutil
 
-# -------------------------------
-# Stock List (Default) - เพิ่ม Salesforce เข้ามาใน Default แล้ว
-# -------------------------------
-default_stocks = {
-    "GOOGL": "Alphabet",
-    "MSFT": "Microsoft",
-    "AMZN": "Amazon",
-    "CRM": "Salesforce"
-}
+# --- Configuration / Page Setup ---
+st.set_page_config(layout="wide")
+st.title("Stock Information Dashboard")
 
-# -------------------------------
-# Date Setup
-# -------------------------------
-today = datetime.date.today()
-one_month_ago = today - datetime.timedelta(days=30)
-three_months_ago = today - datetime.timedelta(days=90)
-six_months_ago = today - datetime.timedelta(days=180) # ใช้สำหรับดึงข้อมูล 6 เดือนสำหรับ Sparkline
+# --- User Input ---
+st.sidebar.header("Select Stock")
+# เพิ่ม Salesforce (CRM) เข้าไปในตัวเลือกหุ้นตามที่แจ้งไว้
+stock_options = [
+    "AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA", "JPM", "V", "PG", "UNH", "HD", "DIS", "NFLX", "ADBE", "PYPL", "CMCSA", "INTC", "CSCO", "PEP", "KO", "BAC", "WMT", "XOM", "CVX", "LLY", "MRK", "PFE", "ABBV", "COST", "SBUX", "CRM"
+]
+selected_symbol = st.sidebar.selectbox("Choose a stock symbol:", stock_options)
 
-# -------------------------------
-# Data Fetching
-# -------------------------------
-@st.cache_data(ttl=3600) # Cache data for 1 hour to prevent excessive API calls
-def get_real_prices(symbol):
+# --- Fetch Stock Data Function ---
+@st.cache_data(ttl=3600) # แคชข้อมูล 1 ชั่วโมงเพื่อลดการเรียกใช้ API ซ้ำซ้อน
+def get_stock_data(symbol):
     try:
-        # ดึงข้อมูล 6 เดือนเพื่อรองรับ Sparkline และการคำนวณย้อนหลัง
-        df = yf.Ticker(symbol).history(period="6mo", interval="1d")
-        if df.empty:
-            st.warning(f"⚠️ No historical data found for {symbol}. It might be a new listing or incorrect symbol.")
-            return pd.Series()
-        return df["Close"]
-    except Exception as e:
-        st.error(f"❌ Error fetching data for {symbol}: {e}")
-        return pd.Series()
-
-# -------------------------------
-# Growth Calculation
-# -------------------------------
-def calc_growth(df, reference_date):
-    try:
-        # ตรวจสอบว่า df ไม่ว่างเปล่า และมีข้อมูลเพียงพอ
-        if df.empty or len(df) < 2: # อย่างน้อย 2 วัน สำหรับ daily change, และมากกว่านั้นสำหรับ monthly
+        ticker = yf.Ticker(symbol)
+        # ดึงข้อมูลย้อนหลัง 1 ปี (รายวัน)
+        data = ticker.history(period="1y")
+        if data.empty:
+            st.error(f"No historical data found for {symbol}. Please check the symbol.")
             return None
 
-        # หาวันที่ใน df ที่ใกล้ที่สุดก่อนหรือเท่ากับ reference_date
-        # ใช้ df.index.get_loc เพื่อหาตำแหน่งที่แม่นยำ หรือ fallback ไปที่การกรองแบบเดิม
-        past_price_candidates = df.loc[df.index <= pd.to_datetime(reference_date)]
+        # --- สำคัญ: แก้ไข Timezone ของ Index ---
+        # ถ้า Index มี Timezone (เช่น datetime64[ns, America/New_York])
+        # ให้ลบ Timezone ออกเพื่อให้เป็น timezone-naive (datetime64[ns])
+        # เพื่อให้เปรียบเทียบกับ datetime.datetime ได้โดยตรง
+        if data.index.tz is not None:
+            data.index = data.index.tz_localize(None)
+            st.info(f"Removed timezone from {symbol} data index for comparison.") # ใช้ st.info แทน st.warning เพื่อลดความกังวล
         
-        if past_price_candidates.empty:
-            return None # ไม่พบข้อมูลก่อนวันที่อ้างอิง
-
-        past_price = past_price_candidates.iloc[-1]
-        current_price = df.iloc[-1]
-
-        if past_price == 0: # ป้องกัน ZeroDivisionError
-            return None 
-
-        growth = ((current_price - past_price) / past_price) * 100
-        return round(growth, 2)
+        return data
     except Exception as e:
-        # st.error(f"Error in calc_growth: {e}") # สำหรับ Debug
+        st.error(f"Error fetching data for {symbol}: {e}")
         return None
 
-def calc_daily_change(df):
-    try:
-        if len(df) < 2:
-            return None
-        today_price = df.iloc[-1]
-        yesterday_price = df.iloc[-2]
-        if yesterday_price == 0: # ป้องกัน ZeroDivisionError
-            return None
-        
-        change = ((today_price - yesterday_price) / yesterday_price) * 100
-        return round(change, 2)
-    except Exception:
-        return None
+# --- Main Application Logic ---
+if selected_symbol:
+    stock_data = get_stock_data(selected_symbol)
 
-# -------------------------------
-# Streamlit UI
-# -------------------------------
-st.set_page_config(page_title="AI Agent Stock Dashboard", layout="wide", initial_sidebar_state="collapsed")
-st.title("🤖📊 AI Agent Stock Tracker")
+    if stock_data is not None:
+        # แยกเฉพาะราคาปิด 'Close'
+        prices = stock_data['Close']
 
-# Header 1
-st.header("แสดงผลราคาหุ้น และการเปลี่ยนแปลงตามช่วงเวลา")
+        # --- การคำนวณวันที่ ---
+        # เนื่องจากเราทำให้ prices.index เป็น timezone-naive แล้ว
+        # เราจึงสามารถใช้ datetime.datetime.now() ซึ่งเป็น timezone-naive ได้โดยตรง
+        today = datetime.datetime.now()
+        # คำนวณวันที่ย้อนหลัง 1 เดือนอย่างแม่นยำ
+        one_month_ago = today - relativedelta(months=1)
 
-# Command Input (ยังคงไว้ตาม workflow เดิม)
-command = st.text_input("ป้อนคำสั่ง (เช่น 'AI agent stock')", "AI agent stock").strip().lower()
 
-if command == "ai agent stock":
-    # Header 2
-    st.subheader("ค้นหาราคาหุ้น")
-    stock_input = st.text_input("ป้อนสัญลักษณ์หุ้นที่ต้องการ (คั่นด้วยคอมมา, เช่น MSFT,GOOGL):")
+        # --- เตรียมข้อมูลสำหรับการแสดงผล ---
+        stock_info = {
+            "Symbol": selected_symbol,
+            "Current Price": f"{prices.iloc[-1]:,.2f}" if not prices.empty else "N/A", # Format เป็นทศนิยม 2 ตำแหน่ง
+            "Previous Close": f"{prices.iloc[-2]:,.2f}" if len(prices) >= 2 else "N/A",
+            "Volume": f"{stock_data['Volume'].iloc[-1]:,.0f}" if not stock_data['Volume'].empty else "N/A", # Format เป็นจำนวนเต็ม
+        }
 
-    # กำหนดรายการหุ้นที่จะแสดงผล
-    if stock_input:
-        custom_symbols = [x.strip().upper() for x in stock_input.split(",") if x.strip()]
-        stocks = {sym: default_stocks.get(sym, "Unknown") for sym in custom_symbols}
+        # ประวัติราคา (1 เดือน) - ตรรกะการเปรียบเทียบที่แก้ไขแล้ว
+        history_one_month = []
+        # ตรวจสอบว่า prices ไม่ว่างเปล่าและ Index เป็น DatetimeIndex ที่ไม่มี Timezone
+        if not prices.empty and isinstance(prices.index, pd.DatetimeIndex):
+            # การเปรียบเทียบจะทำงานได้อย่างถูกต้องแล้ว
+            history_one_month = prices.loc[prices.index >= one_month_ago].tolist()
+        else:
+            if prices.empty:
+                st.warning("No price data available to generate 1-month history.")
+            else:
+                st.error("Price index is not in datetime format or could not be processed for history.")
+
+
+        # --- แสดงข้อมูล ---
+        st.subheader(f"Stock Information for {selected_symbol}")
+        st.write(stock_info)
+
+        st.subheader("Price Chart (Last 1 Year)")
+        if not stock_data.empty:
+            st.line_chart(stock_data['Close'])
+        else:
+            st.info("No data to display chart.")
+
+        st.subheader("Price History (Last 1 Month)")
+        if history_one_month:
+            # สร้าง DataFrame เพื่อแสดงประวัติราคาให้ดูง่ายขึ้น
+            # ตรวจสอบอีกครั้งว่า prices.index ยังคงเป็น DatetimeIndex ก่อนนำไปกรอง
+            filtered_prices = prices.loc[prices.index >= one_month_ago]
+            history_df = pd.DataFrame({
+                "Date": pd.to_datetime(filtered_prices.index).strftime('%Y-%m-%d'),
+                "Close Price": [f"{p:,.2f}" for p in history_one_month] # Format เป็นทศนิยม 2 ตำแหน่ง
+            })
+            st.dataframe(history_df, use_container_width=True) # ให้ตารางปรับขนาดตามความกว้าง
+        else:
+            st.info("No price history for the last month available or data is insufficient.")
+
+        # --- รายละเอียดหุ้นเพิ่มเติม (ตัวอย่าง) ---
+        st.subheader("Company Information")
+        try:
+            ticker_info = yf.Ticker(selected_symbol).info
+            if ticker_info:
+                st.write(f"**Company Name:** {ticker_info.get('longName', 'N/A')}")
+                st.write(f"**Sector:** {ticker_info.get('sector', 'N/A')}")
+                st.write(f"**Industry:** {ticker_info.get('industry', 'N/A')}")
+                
+                market_cap = ticker_info.get('marketCap')
+                if isinstance(market_cap, (int, float)):
+                    st.write(f"**Market Cap:** {market_cap:,.0f}")
+                else:
+                    st.write(f"**Market Cap:** {market_cap if market_cap else 'N/A'}")
+                    
+                st.write(f"**Website:** {ticker_info.get('website', 'N/A')}")
+                # st.write(f"**Description:** {ticker_info.get('longBusinessSummary', 'N/A')}") # อาจจะยาวเกินไป
+            else:
+                st.info("Additional company information not available.")
+        except Exception as e:
+            st.error(f"Could not fetch additional company information: {e}")
+
     else:
-        stocks = default_stocks # แสดงหุ้นทั้งหมดที่มีลิสต์ไว้แล้ว
-
-    # ประมวลผลและแสดงผล
-    stocks_data = []
-    
-    for symbol, name in stocks.items():
-        prices = get_real_prices(symbol)
-
-        if prices.empty:
-            # st.error ข้อความ Error จะถูกแสดงใน get_real_prices แล้ว
-            continue 
-
-        current_price = round(prices.iloc[-1], 2) if not prices.empty else None
-
-        # คำนวณ % การเปลี่ยนแปลง
-        growth_1d = calc_daily_change(prices)
-        growth_1m = calc_growth(prices, one_month_ago)
-        growth_3m = calc_growth(prices, three_months_ago)
-        
-        # เตรียมข้อมูลสำหรับ Sparkline (ใช้ข้อมูลราคา 6 เดือน)
-        sparkline_data = prices.tolist() if not prices.empty else []
-
-        stocks_data.append({
-            "Symbol": symbol,
-            "Company": name,
-            "Price (USD)": current_price,
-            "% Change (1 Day)": growth_1d,
-            "History (1 Month)": prices.loc[prices.index >= pd.to_datetime(one_month_ago)].tolist() if not prices.empty else [], # ดึงข้อมูล 1 เดือน
-            "History (3 Month)": prices.loc[prices.index >= pd.to_datetime(three_months_ago)].tolist() if not prices.empty else [], # ดึงข้อมูล 3 เดือน
-            "% Change (1 Month)": growth_1m,
-            "% Change (3 Month)": growth_3m,
-            "Trend (6 Months)": sparkline_data # ข้อมูลสำหรับ Sparkline
-        })
-
-    stocks_df = pd.DataFrame(stocks_data)
-
-    if not stocks_df.empty:
-        # คำนวณ min/max สำหรับ LineChartColumn
-        # ใช้ list comprehension เพื่อจัดการกรณีที่ sparkline_data อาจว่างเปล่า
-        all_sparkline_values = [val for sublist in stocks_df["Trend (6 Months)"] if sublist for val in sublist]
-        
-        y_min_val = min(all_sparkline_values) if all_sparkline_values else None
-        y_max_val = max(all_sparkline_values) if all_sparkline_values else None
-
-        # จัดเรียงคอลัมน์ตามที่ต้องการ
-        column_order = ["Company", "Price (USD)", "% Change (1 Day)", "% Change (1 Month)", "% Change (3 Month)", "Trend (6 Months)"]
-        
-        # กำหนดการแสดงผลคอลัมน์ โดยเฉพาะ Sparkline
-        st.dataframe(
-            stocks_df[column_order], # เลือกและเรียงคอลัมน์
-            column_config={
-                "Trend (6 Months)": LineChartColumn(
-                    "Trend (6 Months)",
-                    y_min=y_min_val, # ปรับ scale Y ให้เหมาะสม
-                    y_max=y_max_val, # ปรับ scale Y ให้เหมาะสม
-                    width="small",
-                    height="small",
-                    help="แสดงแนวโน้มราคาหุ้นในช่วง 6 เดือนที่ผ่านมา"
-                ),
-                "Price (USD)": st.column_config.NumberColumn("Price (USD)", format="$%.2f"),
-                "% Change (1 Day)": st.column_config.NumberColumn("% Change (1 Day)", format="%.2f%%"),
-                "% Change (1 Month)": st.column_config.NumberColumn("% Change (1 Month)", format="%.2f%%"),
-                "% Change (3 Month)": st.column_config.NumberColumn("% Change (3 Month)", format="%.2f%%"),
-            },
-            hide_index=True,
-            use_container_width=True
-        )
-    else:
-        st.info("ไม่พบข้อมูลหุ้นที่สามารถแสดงผลได้ โปรดตรวจสอบสัญลักษณ์หุ้นหรือการเชื่อมต่อ.")
-
-else:
-    st.info("⌨️ โปรดป้อนคำสั่ง 'AI agent stock' เพื่อเริ่มต้นการใช้งานโมดูลติดตามหุ้น")
+        st.warning("Please select a stock symbol to view its information.")
