@@ -129,6 +129,8 @@ if command == "ai agent stock":
             "Company": name,
             "Price (USD)": current_price,
             "% Change (1 Day)": growth_1d,
+            "History (1 Month)": prices.loc[prices.index >= pd.to_datetime(one_month_ago)].tolist() if not prices.empty else [], # ดึงข้อมูล 1 เดือน
+            "History (3 Month)": prices.loc[prices.index >= pd.to_datetime(three_months_ago)].tolist() if not prices.empty else [], # ดึงข้อมูล 3 เดือน
             "% Change (1 Month)": growth_1m,
             "% Change (3 Month)": growth_3m,
             "Trend (6 Months)": sparkline_data # ข้อมูลสำหรับ Sparkline
@@ -136,32 +138,39 @@ if command == "ai agent stock":
 
     stocks_df = pd.DataFrame(stocks_data)
 
-    # จัดเรียงคอลัมน์ตามที่ต้องการ
-    column_order = ["Company", "Price (USD)", "% Change (1 Day)", "% Change (1 Month)", "% Change (3 Month)", "Trend (6 Months)"]
-    
-    # กำหนดการแสดงผลคอลัมน์ โดยเฉพาะ Sparkline
-    st.dataframe(
-        stocks_df[column_order], # เลือกและเรียงคอลัมน์
-        column_config={
-            "Trend (6 Months)": LineChartColumn(
-                "Trend (6 Months)",
-                y_min=stocks_df["Trend (6 Months)"].apply(lambda x: min(x) if x else None).min(), # ปรับ scale Y ให้เหมาะสม
-                y_max=stocks_df["Trend (6 Months)"].apply(lambda x: max(x) if x else None).max(), # ปรับ scale Y ให้เหมาะสม
-                width="small",
-                height="small",
-                help="แสดงแนวโน้มราคาหุ้นในช่วง 6 เดือนที่ผ่านมา"
-            ),
-            "Price (USD)": st.column_config.NumberColumn("Price (USD)", format="$%.2f"),
-            "% Change (1 Day)": st.column_config.NumberColumn("% Change (1 Day)", format="%.2f%%"),
-            "% Change (1 Month)": st.column_config.NumberColumn("% Change (1 Month)", format="%.2f%%"),
-            "% Change (3 Month)": st.column_config.NumberColumn("% Change (3 Month)", format="%.2f%%"),
-        },
-        hide_index=True,
-        use_container_width=True
-    )
+    if not stocks_df.empty:
+        # คำนวณ min/max สำหรับ LineChartColumn
+        # ใช้ list comprehension เพื่อจัดการกรณีที่ sparkline_data อาจว่างเปล่า
+        all_sparkline_values = [val for sublist in stocks_df["Trend (6 Months)"] if sublist for val in sublist]
+        
+        y_min_val = min(all_sparkline_values) if all_sparkline_values else None
+        y_max_val = max(all_sparkline_values) if all_sparkline_values else None
 
-    # ยกเลิกการแสดงผลการ download csv.
-    # st.download_button(...)
+        # จัดเรียงคอลัมน์ตามที่ต้องการ
+        column_order = ["Company", "Price (USD)", "% Change (1 Day)", "% Change (1 Month)", "% Change (3 Month)", "Trend (6 Months)"]
+        
+        # กำหนดการแสดงผลคอลัมน์ โดยเฉพาะ Sparkline
+        st.dataframe(
+            stocks_df[column_order], # เลือกและเรียงคอลัมน์
+            column_config={
+                "Trend (6 Months)": LineChartColumn(
+                    "Trend (6 Months)",
+                    y_min=y_min_val, # ปรับ scale Y ให้เหมาะสม
+                    y_max=y_max_val, # ปรับ scale Y ให้เหมาะสม
+                    width="small",
+                    height="small",
+                    help="แสดงแนวโน้มราคาหุ้นในช่วง 6 เดือนที่ผ่านมา"
+                ),
+                "Price (USD)": st.column_config.NumberColumn("Price (USD)", format="$%.2f"),
+                "% Change (1 Day)": st.column_config.NumberColumn("% Change (1 Day)", format="%.2f%%"),
+                "% Change (1 Month)": st.column_config.NumberColumn("% Change (1 Month)", format="%.2f%%"),
+                "% Change (3 Month)": st.column_config.NumberColumn("% Change (3 Month)", format="%.2f%%"),
+            },
+            hide_index=True,
+            use_container_width=True
+        )
+    else:
+        st.info("ไม่พบข้อมูลหุ้นที่สามารถแสดงผลได้ โปรดตรวจสอบสัญลักษณ์หุ้นหรือการเชื่อมต่อ.")
 
 else:
     st.info("⌨️ โปรดป้อนคำสั่ง 'AI agent stock' เพื่อเริ่มต้นการใช้งานโมดูลติดตามหุ้น")
