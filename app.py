@@ -2,7 +2,8 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import datetime
-from dateutil.relativedelta import relativedelta # อาจจะต้อง pip install python-dateutil
+from dateutil.relativedelta import relativedelta
+import pytz # สำคัญ: คุณจะต้องติดตั้งไลบรารี pytz ด้วย (pip install pytz)
 
 # --- Configuration / Page Setup ---
 st.set_page_config(layout="wide")
@@ -27,14 +28,9 @@ def get_stock_data(symbol):
             st.error(f"No historical data found for {symbol}. Please check the symbol.")
             return None
 
-        # --- สำคัญ: แก้ไข Timezone ของ Index ---
-        # ถ้า Index มี Timezone (เช่น datetime64[ns, America/New_York])
-        # ให้ลบ Timezone ออกเพื่อให้เป็น timezone-naive (datetime64[ns])
-        # เพื่อให้เปรียบเทียบกับ datetime.datetime ได้โดยตรง
-        if data.index.tz is not None:
-            data.index = data.index.tz_localize(None)
-            st.info(f"Removed timezone from {symbol} data index for comparison.") # ใช้ st.info แทน st.warning เพื่อลดความกังวล
-        
+        # --- สำคัญ: ไม่ต้องลบ Timezone ออกจาก data.index อีกต่อไป ---
+        # เราจะทำให้ one_month_ago เป็น Timezone เดียวกันแทน
+
         return data
     except Exception as e:
         st.error(f"Error fetching data for {symbol}: {e}")
@@ -48,13 +44,27 @@ if selected_symbol:
         # แยกเฉพาะราคาปิด 'Close'
         prices = stock_data['Close']
 
-        # --- การคำนวณวันที่ ---
-        # เนื่องจากเราทำให้ prices.index เป็น timezone-naive แล้ว
-        # เราจึงสามารถใช้ datetime.datetime.now() ซึ่งเป็น timezone-naive ได้โดยตรง
-        today = datetime.datetime.now()
-        # คำนวณวันที่ย้อนหลัง 1 เดือนอย่างแม่นยำ
-        one_month_ago = today - relativedelta(months=1)
-
+        # --- การคำนวณวันที่: ทำให้เป็น Timezone-aware เหมือนกับข้อมูล ---
+        # 1. ตรวจสอบ Timezone ของข้อมูลหุ้น
+        data_timezone = prices.index.tz
+        
+        if data_timezone is None:
+            # กรณีที่ data.index ไม่มี timezone (ซึ่งไม่ควรเกิดขึ้นกับ yfinance โดยทั่วไป)
+            # เราจะใช้ timezone-naive เหมือนเดิม เพื่อให้โค้ดไม่พัง
+            st.warning("Stock data index does not have a timezone. Proceeding with timezone-naive comparison.")
+            today = datetime.datetime.now()
+            one_month_ago = today - relativedelta(months=1)
+        else:
+            # 2. แปลง datetime.datetime.now() ให้เป็น Timezone-aware ใน Timezone เดียวกัน
+            # ตัวอย่าง: America/New_York
+            st.info(f"Localizing date calculations to data's timezone: {data_timezone}")
+            
+            # Use tz_localize(None) first to ensure it's naive before localizing,
+            # or directly use datetime.datetime.now() and then localize it.
+            
+            # This is the most common and robust way to get current time in a specific timezone
+            today = datetime.datetime.now(data_timezone)
+            one_month_ago = today - relativedelta(months=1)
 
         # --- เตรียมข้อมูลสำหรับการแสดงผล ---
         stock_info = {
@@ -66,9 +76,9 @@ if selected_symbol:
 
         # ประวัติราคา (1 เดือน) - ตรรกะการเปรียบเทียบที่แก้ไขแล้ว
         history_one_month = []
-        # ตรวจสอบว่า prices ไม่ว่างเปล่าและ Index เป็น DatetimeIndex ที่ไม่มี Timezone
+        # ตรวจสอบว่า prices ไม่ว่างเปล่าและ Index เป็น DatetimeIndex
         if not prices.empty and isinstance(prices.index, pd.DatetimeIndex):
-            # การเปรียบเทียบจะทำงานได้อย่างถูกต้องแล้ว
+            # การเปรียบเทียบจะทำงานได้อย่างถูกต้องแล้ว เพราะทั้งสองฝ่ายเป็น Timezone-aware ใน Timezone เดียวกัน
             history_one_month = prices.loc[prices.index >= one_month_ago].tolist()
         else:
             if prices.empty:
@@ -93,7 +103,7 @@ if selected_symbol:
             # ตรวจสอบอีกครั้งว่า prices.index ยังคงเป็น DatetimeIndex ก่อนนำไปกรอง
             filtered_prices = prices.loc[prices.index >= one_month_ago]
             history_df = pd.DataFrame({
-                "Date": pd.to_datetime(filtered_prices.index).strftime('%Y-%m-%d'),
+                "Date": pd.to_datetime(filtered_prices.index).strftime('%Y-%m-%d'), # Convert to string for display
                 "Close Price": [f"{p:,.2f}" for p in history_one_month] # Format เป็นทศนิยม 2 ตำแหน่ง
             })
             st.dataframe(history_df, use_container_width=True) # ให้ตารางปรับขนาดตามความกว้าง
