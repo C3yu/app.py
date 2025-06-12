@@ -111,7 +111,7 @@ for symbol, name in stocks.items():
         label="📥 Download CSV",
         data=stocks_df.to_csv(index=False),
         file_name="ai_agent_stocks.csv",
-        mime="text/csv"
+        mime="text/csv",
         key="download_button_csv"
     )
 else:
